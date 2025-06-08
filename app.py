@@ -386,62 +386,123 @@ if portfolio_df is not None:
         
         if sp500_hist is not None:
             # Create a dataframe to track portfolio performance over time
-            performance_df = pd.DataFrame()
-            performance_df['Date'] = sp500_hist.index
+            performance_df = pd.DataFrame(index=sp500_hist.index)
+            performance_df['Portfolio Value'] = 0.0
             
-            # Calculate S&P500 performance
-            sp500_start = sp500_hist['Close'].iloc[0]
-            performance_df['S&P500'] = (sp500_hist['Close'] / sp500_start - 1) * 100
-            
-            # Calculate portfolio performance
-            performance_df['Portfolio'] = 0
-            
-            # Weight each stock by its initial investment proportion
-            total_investment = portfolio_df['Investment Value'].sum()  # Use Investment Value which is already in EUR
-            
-            for i, row in portfolio_df.iterrows():
+            # Get daily closing prices for all assets and calculate total portfolio value for each day
+            for _, row in portfolio_df.iterrows():
                 ticker = row['Stock Ticker']
-                weight = row['Investment Value'] / total_investment if total_investment > 0 else 0
+                stock_quantity = row['Stock Number']  # Using Stock Number for quantity
+                currency = row['Currency']
+                
+                # Get historical data for this stock
                 hist = get_stock_history(ticker, period=period_str)
                 
                 if hist is not None and not hist.empty:
-                    # Get the currency for this stock
-                    currency = row['Currency']
+                    # Align dates with S&P500
+                    aligned_hist = hist.reindex(sp500_hist.index, method='ffill')
                     
-                    # Reindex to match the S&P500 dates
-                    hist = hist.reindex(sp500_hist.index, method='ffill')
-                    
-                    # Convert all historical prices to EUR
-                    converted_prices = []
-                    for price in hist['Close']:
-                        converted_prices.append(convert_to_eur(price, currency))
-                    
-                    # Create a series with converted prices
-                    converted_series = pd.Series(converted_prices, index=hist.index)
-                    
-                    # Calculate performance based on EUR prices
-                    stock_start = converted_series.iloc[0] if not pd.isna(converted_series.iloc[0]) else 1.0
-                    if stock_start > 0:  # Avoid division by zero
-                        stock_perf = (converted_series / stock_start - 1) * 100
-                        performance_df['Portfolio'] += stock_perf * weight
+                    # Convert prices to EUR
+                    for date in aligned_hist.index:
+                        if date in performance_df.index:
+                            price_in_original = aligned_hist.loc[date, 'Close']
+                            price_in_eur = convert_to_eur(price_in_original, currency)
+                            position_value = price_in_eur * stock_quantity
+                            performance_df.loc[date, 'Portfolio Value'] += position_value
             
-            # Plot the comparison
-            st.subheader(f"Performance Comparison (Last {time_period} Months)")
-            fig = px.line(performance_df, x='Date', y=['Portfolio', 'S&P500'],
-                        title=f'Portfolio vs S&P500 Performance (%)',
-                        labels={'value': 'Return (%)', 'variable': 'Index'})
-            st.plotly_chart(fig, use_container_width=True)
+            # Handle any NaN values in portfolio values first
+            performance_df['Portfolio Value'] = performance_df['Portfolio Value'].fillna(method='ffill').fillna(method='bfill')
             
-            # Calculate and display metrics
-            portfolio_return = performance_df['Portfolio'].iloc[-1] if not pd.isna(performance_df['Portfolio'].iloc[-1]) else 0.0
-            sp500_return = performance_df['S&P500'].iloc[-1] if not pd.isna(performance_df['S&P500'].iloc[-1]) else 0.0
-            outperformance = portfolio_return - sp500_return
-            
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Portfolio Return", f"{portfolio_return:.2f}%")
-            col2.metric("S&P500 Return", f"{sp500_return:.2f}%")
-            col3.metric("Outperformance", f"{outperformance:.2f}%", 
-                        f"{'+' if outperformance > 0 else ''}{outperformance:.2f}%")
+            # Check if we have valid portfolio values
+            if performance_df['Portfolio Value'].isna().all() or (performance_df['Portfolio Value'] == 0).all():
+                st.error("No valid portfolio values calculated. Please check your data.")
+            else:
+                # Debug information
+                st.write(f"Portfolio data points: {len(performance_df)}")
+                st.write(f"Portfolio value range: {performance_df['Portfolio Value'].min()} to {performance_df['Portfolio Value'].max()}")
+                
+                # Find the first non-NaN value to use as the starting point
+                first_valid_idx = performance_df['Portfolio Value'].first_valid_index()
+                if first_valid_idx is not None:
+                    portfolio_start = performance_df.loc[first_valid_idx, 'Portfolio Value']
+                else:
+                    # Fallback to using the minimum value if we can't find a valid starting point
+                    portfolio_start = performance_df['Portfolio Value'].min()
+                
+                sp500_start = sp500_hist['Close'].iloc[0]
+                
+                st.write(f"Portfolio start value: {portfolio_start}")
+                st.write(f"S&P500 start value: {sp500_start}")
+                
+                # Create normalized columns
+                if portfolio_start > 0:
+                    performance_df['Portfolio Normalized'] = performance_df['Portfolio Value'] / portfolio_start
+                else:
+                    st.error("Portfolio starting value is zero or negative. Cannot normalize.")
+                    performance_df['Portfolio Normalized'] = 1.0
+                
+                if sp500_start > 0:
+                    performance_df['S&P500 Normalized'] = sp500_hist['Close'] / sp500_start
+                else:
+                    st.error("S&P500 starting value is zero or negative. Cannot normalize.")
+                    performance_df['S&P500 Normalized'] = 1.0
+                
+                # Fill any missing values
+                performance_df = performance_df.ffill().bfill()
+                
+                # Create the plot
+                st.subheader(f"Normalized Performance Comparison (Last {time_period} Months)")
+                
+                fig = go.Figure()
+                
+                # Add portfolio line
+                fig.add_trace(go.Scatter(
+                    x=performance_df.index,
+                    y=performance_df['Portfolio Normalized'],
+                    mode='lines',
+                    name='Portfolio',
+                    line=dict(color='blue', width=2)
+                ))
+                
+                # Add S&P500 line
+                fig.add_trace(go.Scatter(
+                    x=performance_df.index,
+                    y=performance_df['S&P500 Normalized'],
+                    mode='lines',
+                    name='S&P500',
+                    line=dict(color='red', width=2)
+                ))
+                
+                # Update layout
+                fig.update_layout(
+                    title=f'Portfolio vs S&P500 Normalized Performance (Starting Value = 1.0)',
+                    xaxis_title='Date',
+                    yaxis_title='Normalized Value',
+                    legend_title='Index',
+                    hovermode='x unified'
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Calculate and display metrics
+                portfolio_final = performance_df['Portfolio Normalized'].iloc[-1]
+                sp500_final = performance_df['S&P500 Normalized'].iloc[-1]
+                
+                portfolio_return = (portfolio_final - 1) * 100
+                sp500_return = (sp500_final - 1) * 100
+                outperformance = portfolio_return - sp500_return
+                
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Portfolio Return", f"{portfolio_return:.2f}%")
+                col2.metric("S&P500 Return", f"{sp500_return:.2f}%")
+                col3.metric("Outperformance", f"{outperformance:.2f}%", 
+                            f"{'+' if outperformance > 0 else ''}{outperformance:.2f}%")
+                
+                # Display additional information about the normalized values
+                with st.expander("About Normalized Values"):
+                    st.write("Normalized values show how an investment of 1 unit would have grown over time.")
+                    st.write("Both the portfolio and S&P500 values are set to 1.0 at the beginning of the period,")
+                    st.write("making it easy to compare their relative performance regardless of the actual investment amount.")
     
     # Sector Diversification
     elif page == "Sector Diversification":
