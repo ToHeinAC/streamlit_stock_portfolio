@@ -161,6 +161,22 @@ portfolio_df = load_portfolio_data()
 # Dictionary to store exchange rates for reuse
 exchange_rates_cache = {}
 
+# Initialize metrics DataFrame
+metrics_df = pd.DataFrame()
+if portfolio_df is not None:
+    metrics_df['Stock Name'] = portfolio_df['Stock Name']
+    metrics_df['Stock Ticker'] = portfolio_df['Stock Ticker']
+    
+    # Initialize metrics columns
+    metrics_to_extract = [
+        'debtToEquity', 'revenuePerShare', 'trailingPE', 'pegRatio', 'trailingPegRatio',
+        'forwardPE', 'priceToBook', 'earningsPerShare', 'dividendYield', 'dividendRate',
+        'dividendGrowth', 'targetLowPrice', 'targetMedianPrice', 'targetHighPrice', 'currentPrice'
+    ]
+    
+    for metric in metrics_to_extract:
+        metrics_df[metric] = np.nan
+
 if portfolio_df is not None:
     # Calculate current values and add to dataframe
     portfolio_df['Current Price'] = 0.0
@@ -274,10 +290,91 @@ if portfolio_df is not None:
         
         # Performance visualization
         st.subheader("Individual Stock Performance")
-        fig = px.bar(portfolio_df, x='Stock Name', y='Profit/Loss %', 
-                    color='Profit/Loss %', 
-                    color_continuous_scale=['red', 'green'],
-                    title='Stock Performance (% Gain/Loss)')
+        
+        # Create a copy of the dataframe for visualization
+        perf_df = portfolio_df.copy()
+        
+        # Create separate dataframes for positive and negative performance
+        positive_df = perf_df[perf_df['Profit/Loss %'] >= 0]
+        negative_df = perf_df[perf_df['Profit/Loss %'] < 0]
+        
+        # Create a figure with two traces
+        fig = go.Figure()
+        
+        # Add positive performance bars with continuous green color scale
+        if not positive_df.empty:
+            # Sort by performance for better visualization
+            positive_df = positive_df.sort_values('Profit/Loss %')
+            
+            # Get the maximum positive value for scaling
+            max_positive = positive_df['Profit/Loss %'].max()
+            
+            # Create a list of colors from light green to dark green based on values
+            green_colors = []
+            for val in positive_df['Profit/Loss %']:
+                # Calculate intensity (0 to 1) based on the value's position in the range
+                if max_positive > 0:
+                    intensity = val / max_positive
+                else:
+                    intensity = 0.5  # Default mid-intensity if all values are 0
+                
+                # Generate RGB color: interpolate from light green (144,238,144) to dark green (0,100,0)
+                r = int(144 - intensity * 144)
+                g = int(238 - intensity * 138)
+                b = int(144 - intensity * 144)
+                green_colors.append(f'rgb({r},{g},{b})')
+            
+            fig.add_trace(go.Bar(
+                x=positive_df['Stock Name'],
+                y=positive_df['Profit/Loss %'],
+                marker=dict(
+                    color=green_colors,
+                    showscale=False
+                ),
+                name='Positive Performance'
+            ))
+        
+        # Add negative performance bars with continuous red color scale
+        if not negative_df.empty:
+            # Sort by performance for better visualization
+            negative_df = negative_df.sort_values('Profit/Loss %')
+            
+            # Get the minimum negative value for scaling
+            min_negative = negative_df['Profit/Loss %'].min()
+            
+            # Create a list of colors from dark red to light red based on values
+            red_colors = []
+            for val in negative_df['Profit/Loss %']:
+                # Calculate intensity (0 to 1) based on the value's position in the range
+                if min_negative < 0:
+                    intensity = val / min_negative  # Will be between 0 and 1
+                else:
+                    intensity = 0.5  # Default mid-intensity
+                
+                # Generate RGB color: interpolate from dark red (139,0,0) to light red (255,99,71)
+                r = int(139 + (255-139) * (1-intensity))
+                g = int(0 + 99 * (1-intensity))
+                b = int(0 + 71 * (1-intensity))
+                red_colors.append(f'rgb({r},{g},{b})')
+            
+            fig.add_trace(go.Bar(
+                x=negative_df['Stock Name'],
+                y=negative_df['Profit/Loss %'],
+                marker=dict(
+                    color=red_colors,
+                    showscale=False
+                ),
+                name='Negative Performance'
+            ))
+        
+        # Update layout
+        fig.update_layout(
+            title='Stock Performance (% Gain/Loss)',
+            xaxis_title='Stock Name',
+            yaxis_title='Profit/Loss %',
+            showlegend=False
+        )
+        
         st.plotly_chart(fig, use_container_width=True)
 
     # Performance vs S&P500
@@ -351,7 +448,7 @@ if portfolio_df is not None:
         st.header("Sector Diversification")
         
         # Group by sector
-        sector_investment = portfolio_df.groupby('Sector').agg({
+        sector_investment = portfolio_df.groupby('Sector', observed=True).agg({
             'Stock Purchase Price': lambda x: (portfolio_df.loc[x.index, 'Stock Number'] * x).sum(),
             'Current Value': 'sum'
         }).reset_index()
@@ -359,6 +456,24 @@ if portfolio_df is not None:
         sector_investment.columns = ['Sector', 'Total Investment', 'Current Value']
         sector_investment['Profit/Loss'] = sector_investment['Current Value'] - sector_investment['Total Investment']
         sector_investment['Return %'] = (sector_investment['Current Value'] / sector_investment['Total Investment'] - 1) * 100
+        
+        # Calculate value-weighted performance for each sector
+        # First, get individual stock returns and weights within each sector
+        sector_weighted_returns = {}
+        for sector in portfolio_df['Sector'].unique():
+            sector_stocks = portfolio_df[portfolio_df['Sector'] == sector]
+            total_sector_value = sector_stocks['Current Value'].sum()
+            
+            # Calculate weighted return for each stock in the sector
+            weighted_return = 0
+            for _, stock in sector_stocks.iterrows():
+                weight = stock['Current Value'] / total_sector_value if total_sector_value > 0 else 0
+                weighted_return += stock['Profit/Loss %'] * weight
+            
+            sector_weighted_returns[sector] = weighted_return
+        
+        # Add weighted returns to sector_investment dataframe
+        sector_investment['Weighted Return %'] = sector_investment['Sector'].map(sector_weighted_returns)
         
         # Display sector table
         st.subheader("Sector Allocation")
@@ -385,29 +500,94 @@ if portfolio_df is not None:
             st.plotly_chart(fig, use_container_width=True)
         
         # Sector performance
-        st.subheader("Sector Performance")
-        fig = px.bar(sector_investment, x='Sector', y='Return %',
-                    color='Return %', color_continuous_scale=['red', 'green'],
-                    title='Sector Performance (% Return)')
+        st.subheader("Sector Performance (Value-Weighted)")
+        
+        # Create separate dataframes for positive and negative performance
+        positive_sectors = sector_investment[sector_investment['Weighted Return %'] >= 0]
+        negative_sectors = sector_investment[sector_investment['Weighted Return %'] < 0]
+        
+        # Create a figure with two traces
+        fig = go.Figure()
+        
+        # Add positive performance bars with continuous green color scale
+        if not positive_sectors.empty:
+            # Sort by performance for better visualization
+            positive_sectors = positive_sectors.sort_values('Weighted Return %')
+            
+            # Get the maximum positive value for scaling
+            max_positive = positive_sectors['Weighted Return %'].max()
+            
+            # Create a list of colors from light green to dark green based on values
+            green_colors = []
+            for val in positive_sectors['Weighted Return %']:
+                # Calculate intensity (0 to 1) based on the value's position in the range
+                if max_positive > 0:
+                    intensity = val / max_positive
+                else:
+                    intensity = 0.5  # Default mid-intensity if all values are 0
+                
+                # Generate RGB color: interpolate from light green (144,238,144) to dark green (0,100,0)
+                r = int(144 - intensity * 144)
+                g = int(238 - intensity * 138)
+                b = int(144 - intensity * 144)
+                green_colors.append(f'rgb({r},{g},{b})')
+            
+            fig.add_trace(go.Bar(
+                x=positive_sectors['Sector'],
+                y=positive_sectors['Weighted Return %'],
+                marker=dict(
+                    color=green_colors,
+                    showscale=False
+                ),
+                name='Positive Performance'
+            ))
+        
+        # Add negative performance bars with continuous red color scale
+        if not negative_sectors.empty:
+            # Sort by performance for better visualization
+            negative_sectors = negative_sectors.sort_values('Weighted Return %')
+            
+            # Get the minimum negative value for scaling
+            min_negative = negative_sectors['Weighted Return %'].min()
+            
+            # Create a list of colors from dark red to light red based on values
+            red_colors = []
+            for val in negative_sectors['Weighted Return %']:
+                # Calculate intensity (0 to 1) based on the value's position in the range
+                if min_negative < 0:
+                    intensity = val / min_negative  # Will be between 0 and 1
+                else:
+                    intensity = 0.5  # Default mid-intensity
+                
+                # Generate RGB color: interpolate from dark red (139,0,0) to light red (255,99,71)
+                r = int(139 + (255-139) * (1-intensity))
+                g = int(0 + 99 * (1-intensity))
+                b = int(0 + 71 * (1-intensity))
+                red_colors.append(f'rgb({r},{g},{b})')
+            
+            fig.add_trace(go.Bar(
+                x=negative_sectors['Sector'],
+                y=negative_sectors['Weighted Return %'],
+                marker=dict(
+                    color=red_colors,
+                    showscale=False
+                ),
+                name='Negative Performance'
+            ))
+        
+        # Update layout
+        fig.update_layout(
+            title='Sector Performance (Value-Weighted % Return)',
+            xaxis_title='Sector',
+            yaxis_title='Weighted Return %',
+            showlegend=False
+        )
+        
         st.plotly_chart(fig, use_container_width=True)
     
     # Metrics Comparison
     elif page == "Metrics Comparison":
         st.header("Stock Metrics Comparison")
-        
-        # Get detailed metrics for each stock
-        metrics_df = pd.DataFrame()
-        metrics_df['Stock Name'] = portfolio_df['Stock Name']
-        metrics_df['Stock Ticker'] = portfolio_df['Stock Ticker']
-        
-        metrics_to_extract = [
-            'debtToEquity', 'revenuePerShare', 'trailingPE', 'pegRatio', 'trailingPegRatio',
-            'forwardPE', 'priceToBook', 'earningsPerShare', 'dividendYield', 'dividendRate',
-            'dividendGrowth', 'targetLowPrice', 'targetMedianPrice', 'targetHighPrice', 'currentPrice'
-        ]
-        
-        for metric in metrics_to_extract:
-            metrics_df[metric] = np.nan
         
         # Extract metrics for each stock
         for i, row in portfolio_df.iterrows():
@@ -575,20 +755,20 @@ if portfolio_df is not None:
             metrics_comparison = pd.DataFrame({
                 'Metric': ['Current Price', 'Purchase Price', 'Profit/Loss %', 'P/E Ratio', 'EPS', 'Dividend Yield'],
                 stock1: [
-                    f"€{portfolio_df[portfolio_df['Stock Name'] == stock1]['Current Price'].iloc[0]:.2f}",
-                    f"€{portfolio_df[portfolio_df['Stock Name'] == stock1]['Stock Purchase Price'].iloc[0]:.2f}",
-                    f"{portfolio_df[portfolio_df['Stock Name'] == stock1]['Profit/Loss %'].iloc[0]:.2f}%",
-                    f"{metrics_df[metrics_df['Stock Name'] == stock1]['trailingPE'].iloc[0]:.2f}" if not pd.isna(metrics_df[metrics_df['Stock Name'] == stock1]['trailingPE'].iloc[0]) else 'N/A',
-                    f"€{metrics_df[metrics_df['Stock Name'] == stock1]['earningsPerShare'].iloc[0]:.2f}" if not pd.isna(metrics_df[metrics_df['Stock Name'] == stock1]['earningsPerShare'].iloc[0]) else 'N/A',
-                    f"{metrics_df[metrics_df['Stock Name'] == stock1]['dividendYield'].iloc[0]:.2f}%" if not pd.isna(metrics_df[metrics_df['Stock Name'] == stock1]['dividendYield'].iloc[0]) else 'N/A'
+                    f"€{portfolio_df[portfolio_df['Stock Name'] == stock1][['Current Price']].iloc[0, 0]:.2f}",
+                    f"€{portfolio_df[portfolio_df['Stock Name'] == stock1][['Stock Purchase Price']].iloc[0, 0]:.2f}",
+                    f"{portfolio_df[portfolio_df['Stock Name'] == stock1][['Profit/Loss %']].iloc[0, 0]:.2f}%",
+                    f"{metrics_df[metrics_df['Stock Name'] == stock1][['trailingPE']].iloc[0, 0]:.2f}" if not pd.isna(metrics_df[metrics_df['Stock Name'] == stock1][['trailingPE']].iloc[0, 0]) else 'N/A',
+                    f"€{metrics_df[metrics_df['Stock Name'] == stock1][['earningsPerShare']].iloc[0, 0]:.2f}" if not pd.isna(metrics_df[metrics_df['Stock Name'] == stock1][['earningsPerShare']].iloc[0, 0]) else 'N/A',
+                    f"{metrics_df[metrics_df['Stock Name'] == stock1][['dividendYield']].iloc[0, 0]:.2f}%" if not pd.isna(metrics_df[metrics_df['Stock Name'] == stock1][['dividendYield']].iloc[0, 0]) else 'N/A'
                 ],
                 stock2: [
-                    f"€{portfolio_df[portfolio_df['Stock Name'] == stock2]['Current Price'].iloc[0]:.2f}",
-                    f"€{portfolio_df[portfolio_df['Stock Name'] == stock2]['Stock Purchase Price'].iloc[0]:.2f}",
-                    f"{portfolio_df[portfolio_df['Stock Name'] == stock2]['Profit/Loss %'].iloc[0]:.2f}%",
-                    f"{metrics_df[metrics_df['Stock Name'] == stock2]['trailingPE'].iloc[0]:.2f}" if not pd.isna(metrics_df[metrics_df['Stock Name'] == stock2]['trailingPE'].iloc[0]) else 'N/A',
-                    f"€{metrics_df[metrics_df['Stock Name'] == stock2]['earningsPerShare'].iloc[0]:.2f}" if not pd.isna(metrics_df[metrics_df['Stock Name'] == stock2]['earningsPerShare'].iloc[0]) else 'N/A',
-                    f"{metrics_df[metrics_df['Stock Name'] == stock2]['dividendYield'].iloc[0]:.2f}%" if not pd.isna(metrics_df[metrics_df['Stock Name'] == stock2]['dividendYield'].iloc[0]) else 'N/A'
+                    f"€{portfolio_df[portfolio_df['Stock Name'] == stock2][['Current Price']].iloc[0, 0]:.2f}",
+                    f"€{portfolio_df[portfolio_df['Stock Name'] == stock2][['Stock Purchase Price']].iloc[0, 0]:.2f}",
+                    f"{portfolio_df[portfolio_df['Stock Name'] == stock2][['Profit/Loss %']].iloc[0, 0]:.2f}%",
+                    f"{metrics_df[metrics_df['Stock Name'] == stock2][['trailingPE']].iloc[0, 0]:.2f}" if not pd.isna(metrics_df[metrics_df['Stock Name'] == stock2][['trailingPE']].iloc[0, 0]) else 'N/A',
+                    f"€{metrics_df[metrics_df['Stock Name'] == stock2][['earningsPerShare']].iloc[0, 0]:.2f}" if not pd.isna(metrics_df[metrics_df['Stock Name'] == stock2][['earningsPerShare']].iloc[0, 0]) else 'N/A',
+                    f"{metrics_df[metrics_df['Stock Name'] == stock2][['dividendYield']].iloc[0, 0]:.2f}%" if not pd.isna(metrics_df[metrics_df['Stock Name'] == stock2][['dividendYield']].iloc[0, 0]) else 'N/A'
                 ]
             })
             
