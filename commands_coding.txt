@@ -1,0 +1,18 @@
+We are in the folder streamlit_stock_portfolio.
+
+Use yfinance >= 0.2.61 for a streamlit app called app.py that builds dashboards of a portfolio.
+The features shall include five sliders:
+- Portfolio overview with total value and total investment as well as the comparioson for each stock
+- Portfolio performance vs. S&P500 from a starting date up to now.
+- Portfolio holding and revenue diversification for individual sectors 
+- Portfolio main metrics comparison including debtToEquity, revenuePerShare, PE ratio, PEG ratio, trailingPegRatio, ForwardPE, ForwardPEG, EPS, dividend yield, dividend growth and analyst_price_targets (low mid high) vs. current price
+- individual stock compari  son (2 Stocks) over a given time period
+
+For this you will read in port.xlsx file with the following columns:
+- Stock Name
+- Stock Ticker 
+- Stock Number
+- Stock Purchase Price
+
+Write this app using the mcp Context7 (if available).
+Go step by step with each slider as one step and test the app after each step.
