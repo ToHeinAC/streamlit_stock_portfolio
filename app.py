@@ -22,9 +22,12 @@ st.markdown("---")
 
 # Function to load portfolio data
 @st.cache_data(ttl=3600)
-def load_portfolio_data():
+def load_portfolio_data(uploaded_file=None):
     try:
-        df = pd.read_excel('port.xlsx')
+        if uploaded_file is None:
+            return None
+            
+        df = pd.read_excel(uploaded_file)
         required_columns = ['Stock Name', 'Stock Ticker', 'Stock Number', 'Stock Purchase Price']
         for col in required_columns:
             if col not in df.columns:
@@ -155,8 +158,20 @@ def get_sp500_data(period="1y"):
         st.error(f"Error fetching S&P 500 data: {e}")
         return None
 
+# File uploader for portfolio data
+st.sidebar.header("Upload Portfolio File")
+uploaded_file = st.sidebar.file_uploader("Upload your portfolio Excel file", type=['xlsx', 'xls'])
+
+# Display sample file format information
+with st.sidebar.expander("Portfolio File Format"):
+    st.write("Your Excel file should have the following columns:")
+    st.write("- Stock Name: Full name of the stock")
+    st.write("- Stock Ticker: Stock symbol as used in Yahoo Finance")
+    st.write("- Stock Number: Number of shares owned")
+    st.write("- Stock Purchase Price: Price paid per share")
+
 # Load portfolio data
-portfolio_df = load_portfolio_data()
+portfolio_df = load_portfolio_data(uploaded_file)
 
 # Dictionary to store exchange rates for reuse
 exchange_rates_cache = {}
@@ -851,4 +866,24 @@ if portfolio_df is not None:
             )
             st.plotly_chart(fig, use_container_width=True)
 else:
-    st.error("Failed to load portfolio data. Please check that the port.xlsx file exists and has the required columns.")
+    if uploaded_file is None:
+        st.info("Please upload your portfolio Excel file using the file uploader in the sidebar.")
+        
+        # Show sample portfolio structure
+        st.subheader("Sample Portfolio File Structure")
+        sample_data = {
+            'Stock Name': ['Apple Inc.', 'Microsoft Corporation', 'Amazon.com Inc.'],
+            'Stock Ticker': ['AAPL', 'MSFT', 'AMZN'],
+            'Stock Number': [10, 5, 2],
+            'Stock Purchase Price': [150.75, 245.30, 3200.50]
+        }
+        sample_df = pd.DataFrame(sample_data)
+        st.dataframe(sample_df)
+        
+        st.markdown("""### Instructions:
+        1. Create an Excel file with the columns shown above
+        2. Fill in your portfolio data
+        3. Upload the file using the sidebar uploader
+        4. The dashboard will automatically update with your portfolio information""")
+    else:
+        st.error("Failed to load portfolio data. Please check that your Excel file has the required columns.")
